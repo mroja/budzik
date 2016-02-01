@@ -94,6 +94,9 @@ class P300EasyClassifier(object):
         joblib.dump(self.clf, self.fname, compress=9)
         
     def run(self, epoch, bas, Fs):
+        '''epoch - array (channels x time), bas - baseline in seconds (negative),
+        Fs - sampling frequency, Hz,
+        returns decision - 1 for target, 0 for nontarget'''
         if len(self.epoch_buffor)< self.max_avr:
             self.epoch_buffor.append(epoch)
             avr_epoch = np.mean(self.epoch_buffor, axis=0)
