@@ -3,7 +3,6 @@
 
 import numpy as np 
 import scipy.signal as ss
-import scikit.learn
 from sklearn.externals import joblib
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from collections import deque
@@ -84,8 +83,8 @@ class P300EasyClassifier(object):
             nontarget_dat = _tags_to_array(nontargets)
         data = np.vstack((target_data, nontarget_data))
         labels = np.zeros(len(data))
-        labels[:len(target_data] = 1
-
+        labels[:len(target_data)] = 1
+        data, labels = _remove_artifact_epochs(data, labels)
         features = _feature_extraction(data, Fs, bas)
         
         if clf is None:
@@ -96,7 +95,8 @@ class P300EasyClassifier(object):
     def run(self, epoch, bas, Fs):
         '''epoch - array (channels x time), bas - baseline in seconds (negative),
         Fs - sampling frequency, Hz,
-        returns decision - 1 for target, 0 for nontarget'''
+        returns decision - 1 for target, 0 for nontarget, 
+        None - for no decision'''
         if len(self.epoch_buffor)< self.max_avr:
             self.epoch_buffor.append(epoch)
             avr_epoch = np.mean(self.epoch_buffor, axis=0)
