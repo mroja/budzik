@@ -14,9 +14,11 @@ from helper_functions import mgr_filter
 from helper_functions import montage_custom
 from helper_functions import montage_csa
 from helper_functions import montage_ears
-
+from helper_functions import exclude_channels
+import p300_class
+from p300_class import P300EasyClassifier
 #dataset
-ds = u'/dmj/fizmed/mdovgialo/home_bach/p300_classifier/read_manager_exam/p_1118_calibration_p300.obci'
+ds = u'../../../dane_od/test1.obci'
 
 def target_tags_func(tag):
     return tag['desc'][u'index']==tag['desc'][u'target']
@@ -25,7 +27,8 @@ def nontarget_tags_func(tag):
     return tag['desc'][u'index']!=tag['desc'][u'target']
     
 def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0, 
-                        filter=None, montage=None):
+                        filter=None, montage=None,
+                        drop_chnls = [ u'AmpSaw', u'DriverSaw']):
     '''For offline calibration and testing, load target and nontarget
     epochs using obci read_manager.
     ds - dataset file name without extension.
@@ -39,6 +42,7 @@ def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0,
         custom requires list of reference channel names
     returns - two lists of smart tags: target_tags, nontarget_tags'''
     eeg_rm = read_manager.ReadManager(ds+'.xml', ds+'.raw', ds+'.tag')
+    eeg_rm = exclude_channels(eeg_rm, drop_chnls)
     if filter:
         eeg_rm = mgr_filter(eeg_rm, filter[0], filter[1],filter[2], 
                             filter[3], ftype='cheby2')
@@ -53,9 +57,9 @@ def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0,
             raise Exception('Unknown montage')
    
     data=eeg_rm.get_samples()
-    pb.plot(data[3])
+    #~ pb.plot(data[3])
     #~ pb.ylim([-400, 400])
-    pb.show()
+    #~ pb.show()
     
     tag_def = SmartTagDurationDefinition(start_tag_name=u'blink',
                                         start_offset=start_offset,
@@ -84,8 +88,8 @@ def evoked_from_smart_tags(tags, chnames, bas = -0.1):
     print len(channels_data)
     return np.mean(channels_data, axis=0), scipy.stats.sem(channels_data, axis=0)
 
-def evoked_pair_plot_smart_tags(tags1, tags2, chnames=['O1', 'O2', 'Pz', 'PO7', 'PO8', 'PO3', 'PO4', 'Pz'],
-                                start_offset=-0.1):
+def evoked_pair_plot_smart_tags(tags1, tags2, chnames=['O1', 'O2', 'Pz', 'PO7', 'PO8', 'PO3', 'PO4', 'Cz',],
+                                start_offset=-0.1, labels=['target', 'nontarget']):
     '''debug evoked potential plot,
      pairwise comparison of 2 smarttag lists
      chnames - channels to plot
@@ -97,20 +101,75 @@ def evoked_pair_plot_smart_tags(tags1, tags2, chnames=['O1', 'O2', 'Pz', 'PO7', 
     pb.figure()
     for nr, i in enumerate(chnames):
         pb.subplot( (len(chnames)+1)/2, 2, nr+1)
-        pb.plot(time, ev1[nr], 'r')
-        pb.fill_between(time, ev1[nr]-std1[nr], ev1[nr]+std1[nr], color = 'red', alpha=0.3)
-        pb.plot(time, ev2[nr], 'b')
-        pb.fill_between(time, ev2[nr]-std2[nr], ev2[nr]+std2[nr], color = 'blue', alpha=0.3)
-
+        pb.plot(time, ev1[nr], 'r',label = labels[0])
+        pb.fill_between(time, ev1[nr]-std1[nr], ev1[nr]+std1[nr],
+                            color = 'red', alpha=0.3, )
+        pb.plot(time, ev2[nr], 'b', label = labels[1])
+        pb.fill_between(time, ev2[nr]-std2[nr], ev2[nr]+std2[nr],
+                        color = 'blue', alpha=0.3)
+        
         pb.title(i)
+    pb.legend()
+    
     pb.show()
     
+def testing_class(epochs, cl, target=1):
+    ''' testing p300easy, for one class
+    epochs - 3d array or list smart tag object of epochs of
+    one type (target or nontarget)
+    cl - p300easyclassifier
+    target - class target or nontarget (1, 0)
+    
+    returns accuracy
+    '''
+    ndec = 0
+    ncorr = 0
+    nepochs = []
+    for i in epochs:
+        nepoch = len(cl.epoch_buffor)
+        dec = cl.run(i)
+        if not dec is None:
+            ndec += 1
+            nepochs.append(nepoch+1)
+            if int(target)==int(dec):
+                ncorr +=1
+            
+
+        print dec, target, cl.decision_buffor
+    return ncorr*1./ndec, np.mean(nepochs)
+    
+
 if __name__=='__main__':
-    filter = [[0.9, 30.0], [0.01, 32.0], 3, 30]
+    filter = [[1, 30.0], [0.01, 32.0], 2, 12]
     #~ filter = [30, 32, 3, 30]
     montage = ['custom', 'Cz']
-    
+    baseline = -.2
+    window = 0.8
     ept, epnt = get_epochs_fromfile(ds, filter = filter, duration = 1,
-                                    montage = montage)
+                                    montage = montage,
+                                    start_offset = baseline,
+                                    )
     print ept[0].get_params()
-    evoked_pair_plot_smart_tags(ept, epnt)
+    #~ evoked_pair_plot_smart_tags(ept, epnt, labels=['target', 'nontarget'])
+    
+    training_split = 50
+    tFs = 30
+    
+    cl = P300EasyClassifier(decision_stop=5, max_avr=16, targetFs = tFs)
+    print
+    
+    
+    
+    print  "Accuracy on training set", cl.calibrate(ept[:training_split], epnt[:training_split], bas=baseline, window=window)
+    result = testing_class(ept[training_split:], cl, 1)
+    print "Accuracy on TARGETS", result[0], 'Mean epochs averaged:', result[1]
+    result = testing_class(epnt[training_split:], cl, 0)
+    print "Accuracy on NONTARGETS", result[0], 'Mean epochs averaged:', result[1]
+
+        
+    #~ et = p300_class._tags_to_array(ept)
+    #~ ft = p300_class._feature_extraction(et, 128., baseline, window,)
+    #~ ent = p300_class._tags_to_array(epnt)
+    #~ fnt = p300_class._feature_extraction(ent, 128., baseline, window)
+
+

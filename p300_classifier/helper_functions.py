@@ -8,9 +8,10 @@ from scipy import signal
 import copy
 from obci.analysis.obci_signal_processing.signal import read_info_source
 from obci.analysis.obci_signal_processing.signal import read_data_source
+from obci.analysis.obci_signal_processing.tags import read_tags_source
 from obci.analysis.obci_signal_processing import read_manager
 
-def mgr_filter(mgr, wp, ws, gpass, gstop, analog=0, ftype='ellip', output='ba', unit='hz', use_filtfilt=False):
+def mgr_filter(mgr, wp, ws, gpass, gstop, analog=0, ftype='ellip', output='ba', unit='hz', use_filtfilt=False, meancorr=1.0):
     if unit == 'radians':
         b,a = signal.iirdesign(wp, ws, gpass, gstop, analog, ftype, output)
     elif unit == 'hz':
@@ -28,7 +29,7 @@ def mgr_filter(mgr, wp, ws, gpass, gstop, analog=0, ftype='ellip', output='ba', 
         #samples_source = read_data_source.MemoryDataSource(mgr.get_samples(), False)
         for i in range(int(mgr.get_param('number_of_channels'))):
             print("FILT FILT CHANNEL "+str(i))
-            mgr.get_samples()[i,:] = filtfilt.filtfilt(b, a, mgr.get_samples()[i])
+            mgr.get_samples()[i,:] = filtfilt.filtfilt(b, a, mgr.get_samples()[i]-np.mean(mgr.get_samples()[i])*meancorr)
         samples_source = read_data_source.MemoryDataSource(mgr.get_samples(), False)
     else:
         print("FILTER CHANNELs")
@@ -43,6 +44,7 @@ def mgr_filter(mgr, wp, ws, gpass, gstop, analog=0, ftype='ellip', output='ba', 
 #####
 
 def exclude_channels(mgr, channels):
+    '''exclude all channels in channels list'''
     new_params = copy.deepcopy(mgr.get_params())
     samples = mgr.get_samples()
     new_tags = copy.deepcopy(mgr.get_tags())
@@ -91,6 +93,7 @@ def exclude_channels(mgr, channels):
 
 
 def leave_channels(mgr, channels):
+    '''exclude all channels except those in channels list'''
     chans = copy.deepcopy(mgr.get_param('channels_names'))
     for leave in channels:
         chans.remove(leave)

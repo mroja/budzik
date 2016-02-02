@@ -24,23 +24,25 @@ def _remove_artifact_epochs(data, labels):
     for id, i in enumerate(data):
         if np.max(np.abs(i))>3000:
             mask[id]=False
-    newlabels = [d for d, m in zip(data, mask) if s]
+    newlabels = [d for d, m in zip(data, mask) if m]
     newdata = data[mask]
     return data, labels
         
 
-def _feature_extraction(data, Fs, bas=-0.1):
+def _feature_extraction(data, Fs, bas=-0.1, window=0.4, targetFs=34):
     '''data - 3D numpy array epoch x channels x time,
     returns spatiotemporal features array epoch x features'''
     features = []
     for epoch in data:
-        features.append(_feature_extraction_singular(epoch, Fs, bas))
+        features.append(_feature_extraction_singular(epoch, Fs, bas,
+                                                    window, targetFs))
     return np.array(features)
         
     
 
-def _feature_extraction_singular(epoch, Fs, bas=-0.1, targetFs=24,
-                                window = 0.5):
+def _feature_extraction_singular(epoch, Fs, bas=-0.1, 
+                                window = 0.5,
+                                targetFs=30,):
     '''performs feature extraction on epoch (array channels x time),
     Fs - sampling in Hz
     bas - baseline in seconds
@@ -55,11 +57,23 @@ def _feature_extraction_singular(epoch, Fs, bas=-0.1, targetFs=24,
 
 
 class P300EasyClassifier(object):
+    '''Easy and modular P300 classifier
+    attributes"
+    fname - classifier save filename
+    epoch_buffor - current epoch buffor
+    max_avr - maximum epochs to average
+    decision_buffor - last decisions buffor, when full of identical
+    decisions final decision is made
+    clf - core classifier from sklearn
+    feature_s - feature length'''
     
-    def __init__(self, fname='./class.joblib.pkl', max_avr=10, decision_stop=3):
+    def __init__(self, fname='./class.joblib.pkl', max_avr=10, decision_stop=3, targetFs=30):
         '''fname - classifier file to save or load classifier on disk
         while classifying produce decision after max_avr epochs averaged,
-        or after decision_stop succesfull same decisions'''
+        or after decision_stop succesfull same decisions
+        targetFs - on feature extraction downsample to this Hz
+        '''
+        self.targetFs = targetFs
         self.fname = fname
         self.epoch_buffor = []
         self.max_avr = max_avr
@@ -71,37 +85,52 @@ class P300EasyClassifier(object):
         self.clf = joblib.load(fname)
         
     
-    def calibrate(self, targets, nontargets, bas=-0.1, Fs=None, clf=None):
+    def calibrate(self, targets, nontargets, bas=-0.1, window=0.4, Fs=None, clf=None):
         '''targets, nontargets - 3D arrays (epoch x channel x time)
         or list of OBCI smart tags
         if arrays - need to provide Fs (sampling frequency) in Hz
-        bas - baseline in seconds'''
+        bas - baseline in seconds(negative), in other words start offset'''
     
         if Fs is None:
             Fs = float(targets[0].get_param('sampling_frequency'))
             target_data = _tags_to_array(targets)
-            nontarget_dat = _tags_to_array(nontargets)
+            nontarget_data = _tags_to_array(nontargets)
         data = np.vstack((target_data, nontarget_data))
+        self.epoch_l = data.shape[2]
         labels = np.zeros(len(data))
         labels[:len(target_data)] = 1
         data, labels = _remove_artifact_epochs(data, labels)
-        features = _feature_extraction(data, Fs, bas)
+        features = _feature_extraction(data, Fs, bas, window, self.targetFs)
+        self.feature_s = features.shape[1]
+        self.bas = bas
+        self.window = window
         
         if clf is None:
-            self.clf = LinearDiscriminantAnalysis(solver = 'eigen', shrinkage='auto')
+            self.clf = LinearDiscriminantAnalysis(solver = 'lsqr', shrinkage='auto')
         self.clf.fit(features, labels)
         joblib.dump(self.clf, self.fname, compress=9)
+        return self.clf.score(features, labels)
         
-    def run(self, epoch, bas, Fs):
-        '''epoch - array (channels x time), bas - baseline in seconds (negative),
-        Fs - sampling frequency, Hz,
+    
+        
+        
+    def run(self, epoch, Fs=None):
+        '''epoch - array (channels x time) or smarttag/readmanager object,
+         bas - baseline in seconds (negative),
+        Fs - sampling frequency Hz, leave None if epoch is smart tag,
         returns decision - 1 for target, 0 for nontarget, 
         None - for no decision'''
+        bas = self.bas
+        window = self.window
+        if Fs is None:
+            Fs = float(epoch.get_param('sampling_frequency'))
+            epoch = epoch.get_samples()[:,:self.epoch_l]
         if len(self.epoch_buffor)< self.max_avr:
             self.epoch_buffor.append(epoch)
             avr_epoch = np.mean(self.epoch_buffor, axis=0)
         
-        features = _feature_extraction_singular(avr_epoch, Fs, bas)[None, :]
+        features = _feature_extraction_singular(avr_epoch,
+                                               Fs, bas, window, self.targetFs)[None, :]
         decision = self.clf.predict(features)[0]
         self.decision_buffor.append(decision)
         if len(self.decision_buffor) == self.decision_buffor.maxlen:
