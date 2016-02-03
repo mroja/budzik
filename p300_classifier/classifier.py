@@ -19,6 +19,7 @@ import p300_class
 from p300_class import P300EasyClassifier
 #dataset
 ds = u'../../../dane_od/test1.obci'
+#~ ds = u'../../../dane_od/diody3'
 
 def target_tags_func(tag):
     return tag['desc'][u'index']==tag['desc'][u'target']
@@ -28,7 +29,7 @@ def nontarget_tags_func(tag):
     
 def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0, 
                         filter=None, montage=None,
-                        drop_chnls = [ u'AmpSaw', u'DriverSaw']):
+                        drop_chnls = [ u'AmpSaw', u'DriverSaw']):#, u'trig1', u'trig2']):
     '''For offline calibration and testing, load target and nontarget
     epochs using obci read_manager.
     ds - dataset file name without extension.
@@ -43,9 +44,12 @@ def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0,
     returns - two lists of smart tags: target_tags, nontarget_tags'''
     eeg_rm = read_manager.ReadManager(ds+'.xml', ds+'.raw', ds+'.tag')
     eeg_rm = exclude_channels(eeg_rm, drop_chnls)
+    data=eeg_rm.get_samples()
+    pb.plot(data[0])
+    pb.show()
     if filter:
         eeg_rm = mgr_filter(eeg_rm, filter[0], filter[1],filter[2], 
-                            filter[3], ftype='cheby2')
+                            filter[3], ftype='cheby2', use_filtfilt=True)
     if montage:
         if montage[0] == 'ears':
             eeg_rm = montage_ears(eeg_rm, montage[0], montage[1])
@@ -57,9 +61,8 @@ def get_epochs_fromfile(ds, start_offset=-0.1,duration=2.0,
             raise Exception('Unknown montage')
    
     data=eeg_rm.get_samples()
-    #~ pb.plot(data[3])
-    #~ pb.ylim([-400, 400])
-    #~ pb.show()
+    pb.plot(data[0])
+    pb.show()
     
     tag_def = SmartTagDurationDefinition(start_tag_name=u'blink',
                                         start_offset=start_offset,
@@ -83,7 +86,7 @@ def evoked_from_smart_tags(tags, chnames, bas = -0.1):
         data = i.get_channels_samples(chnames)[:,:min_length]
         for nr, chnl in enumerate(data):
             data[nr] = chnl - np.mean(chnl[0:-Fs*bas])# baseline correction
-        if np.abs(np.max(data))<3000:
+        if np.abs(np.max(data))<4000:
             channels_data.append(data)
     print len(channels_data)
     return np.mean(channels_data, axis=0), scipy.stats.sem(channels_data, axis=0)
@@ -135,30 +138,31 @@ def testing_class(epochs, cl, target=1):
                 ncorr +=1
             
 
-        print dec, target, cl.decision_buffor
+        #~ print dec, target, cl.decision_buffor
+    print 'ndec', ndec
     return ncorr*1./ndec, np.mean(nepochs)
     
 
 if __name__=='__main__':
-    filter = [[1, 30.0], [0.01, 32.0], 2, 12]
-    #~ filter = [30, 32, 3, 30]
+    filter = [[1, 30.0], [0.5, 35.0], 3, 12]
+    #~ filter = [30, 35, 3, 30]
     montage = ['custom', 'Cz']
     baseline = -.2
-    window = 0.8
+    window = 0.6
     ept, epnt = get_epochs_fromfile(ds, filter = filter, duration = 1,
                                     montage = montage,
                                     start_offset = baseline,
                                     )
     print ept[0].get_params()
-    #~ evoked_pair_plot_smart_tags(ept, epnt, labels=['target', 'nontarget'])
+    evoked_pair_plot_smart_tags(ept, epnt, labels=['target', 'nontarget'], chnames=['O1', 'O2'])
     
-    training_split = 50
-    tFs = 30
+    training_split = 20
+    tFs = 24
+    feature_reduction = None
     
-    cl = P300EasyClassifier(decision_stop=5, max_avr=16, targetFs = tFs)
+    cl = P300EasyClassifier(decision_stop=3, max_avr=1000, targetFs = tFs,
+                            feature_reduction = feature_reduction)
     print
-    
-    
     
     print  "Accuracy on training set", cl.calibrate(ept[:training_split], epnt[:training_split], bas=baseline, window=window)
     result = testing_class(ept[training_split:], cl, 1)
@@ -166,10 +170,26 @@ if __name__=='__main__':
     result = testing_class(epnt[training_split:], cl, 0)
     print "Accuracy on NONTARGETS", result[0], 'Mean epochs averaged:', result[1]
 
-        
-    #~ et = p300_class._tags_to_array(ept)
-    #~ ft = p300_class._feature_extraction(et, 128., baseline, window,)
-    #~ ent = p300_class._tags_to_array(epnt)
-    #~ fnt = p300_class._feature_extraction(ent, 128., baseline, window)
+    
+    
+    
+    et = p300_class._tags_to_array(ept)
+    ft = p300_class._feature_extraction(et, 128., baseline, window, targetFs=tFs)
+    ent = p300_class._tags_to_array(epnt)
+    fnt = p300_class._feature_extraction(ent, 128., baseline, window, targetFs=tFs)
+    f = np.vstack((ft, fnt))
+    labels = np.zeros(len(f))
+    labels[:len(ft)] = 1
+    if feature_reduction:
+        rmask = p300_class._feature_reduction_mask(f, labels, feature_reduction)
+    else:
+        rmask = np.ones(ft.shape[1],dtype=bool)
+    pb.subplot(121)
+    pb.plot(ft[:, rmask].T)
+    pb.title('Target features')
+    pb.subplot(122)
+    pb.title('NON Target features')
+    pb.plot(fnt[:, rmask].T)
+    pb.show()
 
 

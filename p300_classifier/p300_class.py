@@ -2,6 +2,7 @@
 # Marian Dovgialo
 
 import numpy as np 
+import scipy.stats
 import scipy.signal as ss
 from sklearn.externals import joblib
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -48,12 +49,33 @@ def _feature_extraction_singular(epoch, Fs, bas=-0.1,
     bas - baseline in seconds
     targetFs = target sampling in Hz (will be approximated)
     window - timewindow after baseline to select in seconds
-    returns  1D array downsampled, len = downsampled samples x channels '''
+    returns  1D array downsampled, len = downsampled samples x channels
     
+    epoch minus mean of baseline, downsampled by factor int(Fs/targetFs)
+    samples used - from end of baseline to window timepoint
+     '''
+    mean = np.mean(epoch[:, :-bas*Fs], axis=1) 
     decimation_factor = int(1.0*Fs/targetFs) 
-    selected = epoch[:,-bas*Fs:(-bas+window)*Fs]
-    features =  ss.decimate(selected, decimation_factor, axis=1)
+    selected = epoch[:,-bas*Fs:(-bas+window)*Fs]-mean[:, None]
+    features =  ss.decimate(selected, decimation_factor, axis=1, ftype='fir')
     return features.flatten()
+    
+def _feature_reduction_mask(ft, labels, mode):
+    ''' ft - features 2d array nsamples x nfeatures
+    labels - nsamples array of labels 0, 1,
+    mode - 'auto', int
+    returns - features mask'''
+    tscore, p = scipy.stats.ttest_ind(ft[labels==1], ft[labels==0])
+    if mode == 'auto':
+        mask = p<0.05
+        if mask.sum()<1:
+            raise Exception('Feature reduction produced zero usable features')
+    elif isinstance(mode, int):
+        mask_ind = np.argsort(p)[-mode:]
+        mask = np.zeros_like(p, dtype=bool)
+        mask[mask_ind] = True
+    return mask
+    
 
 
 class P300EasyClassifier(object):
@@ -67,17 +89,28 @@ class P300EasyClassifier(object):
     clf - core classifier from sklearn
     feature_s - feature length'''
     
-    def __init__(self, fname='./class.joblib.pkl', max_avr=10, decision_stop=3, targetFs=30):
+    def __init__(self, fname='./class.joblib.pkl', max_avr=10,
+                    decision_stop=3, targetFs=30, clf=None,
+                    feature_reduction = None):
         '''fname - classifier file to save or load classifier on disk
         while classifying produce decision after max_avr epochs averaged,
         or after decision_stop succesfull same decisions
         targetFs - on feature extraction downsample to this Hz
+        clf - sklearn type classifier to use as core
+        feature_reduction - 'auto', int, None. If 'auto' - features are
+        reduced, features left are those which have statistically
+        significant (p<0.05) difference in target and nontarget,
+        if int - use feature_reduction most significant features, if 
+        None don't use reduction
         '''
         self.targetFs = targetFs
         self.fname = fname
         self.epoch_buffor = []
         self.max_avr = max_avr
         self.decision_buffor = deque([], decision_stop)
+        self.feature_reduction = feature_reduction
+        if clf is None:
+            self.clf = LinearDiscriminantAnalysis(solver = 'lsqr', shrinkage='auto')
         
     def load_classifier(self, fname=None):
         '''loads classifier from disk, provide fname - path to joblib
@@ -85,7 +118,7 @@ class P300EasyClassifier(object):
         self.clf = joblib.load(fname)
         
     
-    def calibrate(self, targets, nontargets, bas=-0.1, window=0.4, Fs=None, clf=None):
+    def calibrate(self, targets, nontargets, bas=-0.1, window=0.4, Fs=None):
         '''targets, nontargets - 3D arrays (epoch x channel x time)
         or list of OBCI smart tags
         if arrays - need to provide Fs (sampling frequency) in Hz
@@ -101,12 +134,18 @@ class P300EasyClassifier(object):
         labels[:len(target_data)] = 1
         data, labels = _remove_artifact_epochs(data, labels)
         features = _feature_extraction(data, Fs, bas, window, self.targetFs)
+        
+        if self.feature_reduction:
+            mask = _feature_reduction_mask(features, labels, self.feature_reduction)
+            self.feature_reduction_mask = mask
+            features = features[:, mask]
+        
+        
         self.feature_s = features.shape[1]
         self.bas = bas
         self.window = window
         
-        if clf is None:
-            self.clf = LinearDiscriminantAnalysis(solver = 'lsqr', shrinkage='auto')
+
         self.clf.fit(features, labels)
         joblib.dump(self.clf, self.fname, compress=9)
         return self.clf.score(features, labels)
@@ -131,6 +170,9 @@ class P300EasyClassifier(object):
         
         features = _feature_extraction_singular(avr_epoch,
                                                Fs, bas, window, self.targetFs)[None, :]
+        if self.feature_reduction:
+            mask = self.feature_reduction_mask 
+            features = features[:, mask]
         decision = self.clf.predict(features)[0]
         self.decision_buffor.append(decision)
         if len(self.decision_buffor) == self.decision_buffor.maxlen:

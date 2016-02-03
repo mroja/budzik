@@ -4,6 +4,7 @@
 # Marian Dovgialo
 from scipy import *
 from scipy import linalg
+import numpy as np
 from scipy import signal
 import copy
 from obci.analysis.obci_signal_processing.signal import read_info_source
@@ -29,7 +30,7 @@ def mgr_filter(mgr, wp, ws, gpass, gstop, analog=0, ftype='ellip', output='ba', 
         #samples_source = read_data_source.MemoryDataSource(mgr.get_samples(), False)
         for i in range(int(mgr.get_param('number_of_channels'))):
             print("FILT FILT CHANNEL "+str(i))
-            mgr.get_samples()[i,:] = filtfilt.filtfilt(b, a, mgr.get_samples()[i]-np.mean(mgr.get_samples()[i])*meancorr)
+            mgr.get_samples()[i,:] = signal.filtfilt(b, a, mgr.get_samples()[i]-np.mean(mgr.get_samples()[i])*meancorr)
         samples_source = read_data_source.MemoryDataSource(mgr.get_samples(), False)
     else:
         print("FILTER CHANNELs")
